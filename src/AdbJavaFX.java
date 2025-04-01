@@ -181,6 +181,22 @@ public class AdbJavaFX extends Application {
         }
     }
 
+private List<String> runAdbCommand(List<String> commandParts) {
+    List<String> output = new ArrayList<>();
+    try {
+        Process process = new ProcessBuilder(commandParts).start();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+        String line;
+        while ((line = reader.readLine()) != null) {
+            output.add(line.trim());
+        }
+        process.waitFor();
+    } catch (IOException | InterruptedException e) {
+        output.add("Error: " + e.getMessage());
+    }
+    return output;
+}
+
 
     private List<String> runAdbCommand(String command) {
         List<String> output = new ArrayList<>();
@@ -325,105 +341,108 @@ public class AdbJavaFX extends Application {
     }
 
     private void pushFilesToDevice(List<File> files) {
-        if (files == null || files.isEmpty()) {
-            showAlert("No valid files dropped.");
-            return;
-        }
+    if (files == null || files.isEmpty()) {
+        showAlert("No valid files dropped.");
+        return;
+    }
 
-        if (selectedDevice == null && !selectDevice()) {
-            showAlert("No device selected.");
-            return;
-        }
+    if (selectedDevice == null && !selectDevice()) {
+        showAlert("No device selected.");
+        return;
+    }
 
-        // List of common device folders
-        List<String> folders = List.of(
-                "/sdcard/Download/",
-                "/sdcard/Documents/",
-                "/sdcard/Music/",
-                "/sdcard/Pictures/",
-                "/sdcard/DCIM/",
-                "/sdcard/Movies/"
-        );
+    List<String> folders = List.of(
+            "/sdcard/Download/",
+            "/sdcard/Documents/",
+            "/sdcard/Music/",
+            "/sdcard/Pictures/",
+            "/sdcard/DCIM/",
+            "/sdcard/Movies/"
+    );
 
-        Map<File, String> fileToFolder = new HashMap<>();
-        String selectedFolder = null;
+    Map<File, String> fileToFolder = new HashMap<>();
+    String selectedFolder = null;
 
-        if (files.size() > 1) {
-            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-            confirm.setTitle("Push to Same Folder?");
-            confirm.setHeaderText("Multiple files detected.");
-            confirm.setContentText("Do you want to push all files to the same folder?");
+    if (files.size() > 1) {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        confirm.setTitle("Push to Same Folder?");
+        confirm.setHeaderText("Multiple files detected.");
+        confirm.setContentText("Do you want to push all files to the same folder?");
+        ButtonType yes = new ButtonType("Yes");
+        ButtonType no = new ButtonType("No");
+        confirm.getButtonTypes().setAll(yes, no);
 
-            ButtonType yes = new ButtonType("Yes");
-            ButtonType no = new ButtonType("No");
-            confirm.getButtonTypes().setAll(yes, no);
-
-            Optional<ButtonType> choice = confirm.showAndWait();
-            if (choice.isPresent() && choice.get() == yes) {
-                ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
-                folderDialog.setTitle("Select Folder");
-                folderDialog.setHeaderText("Choose where to push all files:");
-                folderDialog.setContentText("Target folder:");
-                Optional<String> result = folderDialog.showAndWait();
-                if (result.isEmpty()) return;
-                selectedFolder = result.get();
-                for (File file : files) {
-                    fileToFolder.put(file, selectedFolder);
-                }
-            } else {
-                // Ask per file safely from JavaFX thread
-                for (File file : files) {
-                    final String[] selectedPath = new String[1];
-                    CountDownLatch latch = new CountDownLatch(1);
-
-                    Platform.runLater(() -> {
-                        ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
-                        folderDialog.setTitle("Select Folder");
-                        folderDialog.setHeaderText("Choose folder for: " + file.getName());
-                        folderDialog.setContentText("Target folder:");
-                        Optional<String> result = folderDialog.showAndWait();
-                        selectedPath[0] = result.orElse(null);
-                        latch.countDown();
-                    });
-
-                    try {
-                        latch.await();
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-
-                    if (selectedPath[0] != null) {
-                        fileToFolder.put(file, selectedPath[0]);
-                    }
-                }
-            }
-        } else {
-            // One file only
-            File file = files.get(0);
+        Optional<ButtonType> choice = confirm.showAndWait();
+        if (choice.isPresent() && choice.get() == yes) {
             ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
             folderDialog.setTitle("Select Folder");
-            folderDialog.setHeaderText("Choose folder for: " + file.getName());
+            folderDialog.setHeaderText("Choose where to push all files:");
             folderDialog.setContentText("Target folder:");
             Optional<String> result = folderDialog.showAndWait();
             if (result.isEmpty()) return;
-            fileToFolder.put(file, result.get());
-        }
-
-        // Push files in background thread
-        new Thread(() -> {
-            int total = fileToFolder.size();
-            int i = 0;
-            for (Map.Entry<File, String> entry : fileToFolder.entrySet()) {
-                File file = entry.getKey();
-                String folder = entry.getValue();
-                String targetPath = folder + file.getName();
-                updateProgress(++i, total);
-                runAdbCommand("adb push \"" + file.getAbsolutePath() + "\" \"" + targetPath + "\"");
+            selectedFolder = result.get();
+            for (File file : files) {
+                fileToFolder.put(file, selectedFolder);
             }
-            hideProgress();
-            Platform.runLater(() -> showAlert("Files pushed successfully."));
-        }).start();
+        } else {
+            for (File file : files) {
+                final String[] selectedPath = new String[1];
+                CountDownLatch latch = new CountDownLatch(1);
+
+                Platform.runLater(() -> {
+                    ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
+                    folderDialog.setTitle("Select Folder");
+                    folderDialog.setHeaderText("Choose folder for: " + file.getName());
+                    folderDialog.setContentText("Target folder:");
+                    Optional<String> result = folderDialog.showAndWait();
+                    selectedPath[0] = result.orElse(null);
+                    latch.countDown();
+                });
+
+                try {
+                    latch.await();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+                if (selectedPath[0] != null) {
+                    fileToFolder.put(file, selectedPath[0]);
+                }
+            }
+        }
+    } else {
+        File file = files.get(0);
+        ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
+        folderDialog.setTitle("Select Folder");
+        folderDialog.setHeaderText("Choose folder for: " + file.getName());
+        folderDialog.setContentText("Target folder:");
+        Optional<String> result = folderDialog.showAndWait();
+        if (result.isEmpty()) return;
+        fileToFolder.put(file, result.get());
     }
+
+    new Thread(() -> {
+        int total = fileToFolder.size();
+        int i = 0;
+        for (Map.Entry<File, String> entry : fileToFolder.entrySet()) {
+            File file = entry.getKey();
+            String folder = entry.getValue();
+            String targetPath = folder + file.getName();
+            updateProgress(++i, total);
+            System.out.println("Pushing: " + file.getAbsolutePath());
+
+            List<String> cmd = List.of(
+                    "adb", "-s", selectedDevice,
+                    "push", file.getAbsolutePath(), targetPath
+            );
+            List<String> result = runAdbCommand(cmd);
+            result.forEach(System.out::println);
+        }
+        hideProgress();
+        Platform.runLater(() -> showAlert("Files pushed successfully."));
+    }).start();
+}
+
 
     private void updateProgress(int current, int total) {
         if (total <= 0) return;
