@@ -180,7 +180,7 @@ public class AdbJavaFX extends Application {
             });
         }
     }
-
+//Updated for pushing to Android devices
 private List<String> runAdbCommand(List<String> commandParts) {
     List<String> output = new ArrayList<>();
     try {
