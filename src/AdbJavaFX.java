@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.HashMap;
 import java.util.Map;
+import javafx.stage.DirectoryChooser; //Added in order for user to choose directory for file to be pulled
+
 
 
 public class AdbJavaFX extends Application {
@@ -277,34 +279,58 @@ private List<String> runAdbCommand(List<String> commandParts) {
 
 
     private void pullSelectedFiles() {
-        List<String> selected = fileList.getSelectionModel().getSelectedItems();
-        if (selected.isEmpty()) return;
-
-        new Thread(() -> {
-            int total = selected.size();
-            Platform.runLater(() -> {
-                progressBar.setVisible(true);
-                progressLabel.setVisible(true);
-                progressBar.setProgress(0);
-            });
-
-            for (int i = 0; i < total; i++) {
-                String file = selected.get(i);
-                runAdbCommand("adb pull " + file);
-                int percent = (int) ((i + 1) / (double) total * 100);
-                int finalI = i;
-                updateProgress(finalI + 1, total);
-                hideProgress();
-
-
-            }
-
-            Platform.runLater(() -> {
-                progressBar.setVisible(false);
-                progressLabel.setVisible(false);
-            });
-        }).start();
+    List<String> selected = fileList.getSelectionModel().getSelectedItems();
+    if (selected.isEmpty()) {
+        showAlert("No files selected to pull.");
+        return;
     }
+
+    // Ask the user to pick a local folder
+    DirectoryChooser chooser = new DirectoryChooser();
+    chooser.setTitle("Select Destination Folder");
+    File destinationDir = chooser.showDialog(null);
+
+    if (destinationDir == null || !destinationDir.isDirectory()) {
+        showAlert("Invalid destination folder.");
+        return;
+    }
+
+    new Thread(() -> {
+        int total = selected.size();
+        Platform.runLater(() -> {
+            progressBar.setVisible(true);
+            progressLabel.setVisible(true);
+            progressBar.setProgress(0);
+        });
+
+        for (int i = 0; i < total; i++) {
+            String remotePath = selected.get(i);
+            String fileName = new File(remotePath).getName();
+            File localFile = new File(destinationDir, fileName);
+
+            List<String> command = List.of(
+                "adb", "-s", selectedDevice,
+                "pull", remotePath, localFile.getAbsolutePath()
+            );
+
+            List<String> result = runAdbCommand(command);
+
+            int percent = (int) ((i + 1) / (double) total * 100);
+            int finalI = i;
+            Platform.runLater(() -> {
+                progressBar.setProgress((finalI + 1) / (double) total);
+                progressLabel.setText(percent + "%");
+                showAlert("Pulled to: " + localFile.getAbsolutePath());
+            });
+        }
+
+        Platform.runLater(() -> {
+            progressBar.setVisible(false);
+            progressLabel.setVisible(false);
+        });
+    }).start();
+}
+
 
     private boolean selectDevice() {
         List<String> devices = new ArrayList<>();
