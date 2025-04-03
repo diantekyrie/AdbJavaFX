@@ -9,6 +9,7 @@ import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
 import java.util.Optional;
 import java.io.*;
 import java.util.ArrayList;
@@ -16,9 +17,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.HashMap;
 import java.util.Map;
-import javafx.stage.DirectoryChooser; //Added in order for user to choose directory for file to be pulled
-
-
+import javafx.stage.DirectoryChooser;
 
 public class AdbJavaFX extends Application {
 
@@ -55,11 +54,20 @@ public class AdbJavaFX extends Application {
 
     @Override
     public void start(Stage stage) {
-        VBox root = new VBox(10);
-        root.setPadding(new javafx.geometry.Insets(10));
+        // Create a horizontal split layout
+        BorderPane root = new BorderPane();
+        root.setPadding(new Insets(10));
 
-        // Buttons
-        VBox buttonBox = new VBox(5);
+        // Left side - Command buttons
+        VBox buttonBox = new VBox(10); // Reduced spacing between buttons
+        buttonBox.setPadding(new Insets(0, 10, 0, 0)); // Add right padding
+
+        // Create a scroll pane for buttons in case there are many
+        ScrollPane buttonScroll = new ScrollPane(buttonBox);
+        buttonScroll.setFitToWidth(true);
+        buttonScroll.setPrefWidth(250); // Set preferred width for the left panel
+
+        // Add command buttons
         for (String[] cmd : adbCommands) {
             Button btn = new Button(cmd[0]);
             btn.setMaxWidth(Double.MAX_VALUE);
@@ -67,14 +75,19 @@ public class AdbJavaFX extends Application {
             buttonBox.getChildren().add(btn);
         }
 
-        // Pull and Exit
+        // Add Pull and Exit buttons
         Button pullBtn = new Button("Pull Selected Files");
+        pullBtn.setMaxWidth(Double.MAX_VALUE);
         pullBtn.setOnAction(e -> pullSelectedFiles());
         buttonBox.getChildren().add(pullBtn);
 
         Button exitBtn = new Button("Exit");
+        exitBtn.setMaxWidth(Double.MAX_VALUE);
         exitBtn.setOnAction(e -> Platform.exit());
         buttonBox.getChildren().add(exitBtn);
+
+        // Right side - Content area
+        VBox contentArea = new VBox(10);
 
         // Search bar
         searchField = new TextField();
@@ -82,6 +95,7 @@ public class AdbJavaFX extends Application {
 
         // File list and filter setup
         fileList = new ListView<>();
+        fileList.setPrefHeight(300); // Set preferred height
         filteredItems = new FilteredList<>(FXCollections.observableArrayList(), s -> true);
         fileList.setItems(filteredItems);
 
@@ -126,24 +140,44 @@ public class AdbJavaFX extends Application {
         contextMenu.getItems().addAll(copyItem, pullItem);
         fileList.setContextMenu(contextMenu);
 
+        // Logcat output
         logcatOutput = new TextArea();
         logcatOutput.setPrefRowCount(10);
 
+        // Progress indicators
+        HBox progressBox = new HBox(10);
         progressBar = new ProgressBar(0);
+        progressBar.setPrefWidth(300);
         progressLabel = new Label("0%");
         progressBar.setVisible(false);
         progressLabel.setVisible(false);
+        progressBox.getChildren().addAll(progressBar, progressLabel);
 
+        // Logcat control button
         Button stopLogcatBtn = new Button("Stop Logcat");
         stopLogcatBtn.setOnAction(e -> stopLogcat());
         stopLogcatBtn.setVisible(false);
 
-        root.getChildren().addAll(buttonBox, searchField, fileList, logcatOutput, stopLogcatBtn, progressBar, progressLabel);
+        // Add all components to the content area
+        contentArea.getChildren().addAll(
+                searchField,
+                fileList,
+                logcatOutput,
+                stopLogcatBtn,
+                progressBox
+        );
 
+        // Set the left and right sides to the main layout
+        root.setLeft(buttonScroll);
+        root.setCenter(contentArea);
+
+        // Create scene and set to stage
         Scene scene = new Scene(root, 800, 700);
         stage.setScene(scene);
         stage.setTitle("ADB Command Executor - JavaFX");
         stage.show();
+
+        // Drag and drop support
         root.setOnDragOver(event -> {
             if (event.getGestureSource() != root &&
                     event.getDragboard().hasFiles()) {
@@ -162,9 +196,9 @@ public class AdbJavaFX extends Application {
             event.setDropCompleted(success);
             event.consume();
         });
-
     }
 
+    // All other methods remain the same
     private void handleCommand(String command) {
         if (command.equals("adb bugreport")) {
             runBugreport();
@@ -182,23 +216,22 @@ public class AdbJavaFX extends Application {
             });
         }
     }
-//Updated for pushing to Android devices
-private List<String> runAdbCommand(List<String> commandParts) {
-    List<String> output = new ArrayList<>();
-    try {
-        Process process = new ProcessBuilder(commandParts).start();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-        String line;
-        while ((line = reader.readLine()) != null) {
-            output.add(line.trim());
-        }
-        process.waitFor();
-    } catch (IOException | InterruptedException e) {
-        output.add("Error: " + e.getMessage());
-    }
-    return output;
-}
 
+    private List<String> runAdbCommand(List<String> commandParts) {
+        List<String> output = new ArrayList<>();
+        try {
+            Process process = new ProcessBuilder(commandParts).start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.add(line.trim());
+            }
+            process.waitFor();
+        } catch (IOException | InterruptedException e) {
+            output.add("Error: " + e.getMessage());
+        }
+        return output;
+    }
 
     private List<String> runAdbCommand(String command) {
         List<String> output = new ArrayList<>();
@@ -227,7 +260,6 @@ private List<String> runAdbCommand(List<String> commandParts) {
         }
         return output;
     }
-
 
     private void startLogcat() {
         logcatOutput.clear();
@@ -277,60 +309,58 @@ private List<String> runAdbCommand(List<String> commandParts) {
         }).start();
     }
 
-
     private void pullSelectedFiles() {
-    List<String> selected = fileList.getSelectionModel().getSelectedItems();
-    if (selected.isEmpty()) {
-        showAlert("No files selected to pull.");
-        return;
-    }
-
-    // Ask the user to pick a local folder
-    DirectoryChooser chooser = new DirectoryChooser();
-    chooser.setTitle("Select Destination Folder");
-    File destinationDir = chooser.showDialog(null);
-
-    if (destinationDir == null || !destinationDir.isDirectory()) {
-        showAlert("Invalid destination folder.");
-        return;
-    }
-
-    new Thread(() -> {
-        int total = selected.size();
-        Platform.runLater(() -> {
-            progressBar.setVisible(true);
-            progressLabel.setVisible(true);
-            progressBar.setProgress(0);
-        });
-
-        for (int i = 0; i < total; i++) {
-            String remotePath = selected.get(i);
-            String fileName = new File(remotePath).getName();
-            File localFile = new File(destinationDir, fileName);
-
-            List<String> command = List.of(
-                "adb", "-s", selectedDevice,
-                "pull", remotePath, localFile.getAbsolutePath()
-            );
-
-            List<String> result = runAdbCommand(command);
-
-            int percent = (int) ((i + 1) / (double) total * 100);
-            int finalI = i;
-            Platform.runLater(() -> {
-                progressBar.setProgress((finalI + 1) / (double) total);
-                progressLabel.setText(percent + "%");
-                showAlert("Pulled to: " + localFile.getAbsolutePath());
-            });
+        List<String> selected = fileList.getSelectionModel().getSelectedItems();
+        if (selected.isEmpty()) {
+            showAlert("No files selected to pull.");
+            return;
         }
 
-        Platform.runLater(() -> {
-            progressBar.setVisible(false);
-            progressLabel.setVisible(false);
-        });
-    }).start();
-}
+        // Ask the user to pick a local folder
+        DirectoryChooser chooser = new DirectoryChooser();
+        chooser.setTitle("Select Destination Folder");
+        File destinationDir = chooser.showDialog(null);
 
+        if (destinationDir == null || !destinationDir.isDirectory()) {
+            showAlert("Invalid destination folder.");
+            return;
+        }
+
+        new Thread(() -> {
+            int total = selected.size();
+            Platform.runLater(() -> {
+                progressBar.setVisible(true);
+                progressLabel.setVisible(true);
+                progressBar.setProgress(0);
+            });
+
+            for (int i = 0; i < total; i++) {
+                String remotePath = selected.get(i);
+                String fileName = new File(remotePath).getName();
+                File localFile = new File(destinationDir, fileName);
+
+                List<String> command = List.of(
+                        "adb", "-s", selectedDevice,
+                        "pull", remotePath, localFile.getAbsolutePath()
+                );
+
+                List<String> result = runAdbCommand(command);
+
+                int percent = (int) ((i + 1) / (double) total * 100);
+                int finalI = i;
+                Platform.runLater(() -> {
+                    progressBar.setProgress((finalI + 1) / (double) total);
+                    progressLabel.setText(percent + "%");
+                    showAlert("Pulled to: " + localFile.getAbsolutePath());
+                });
+            }
+
+            Platform.runLater(() -> {
+                progressBar.setVisible(false);
+                progressLabel.setVisible(false);
+            });
+        }).start();
+    }
 
     private boolean selectDevice() {
         List<String> devices = new ArrayList<>();
@@ -367,108 +397,107 @@ private List<String> runAdbCommand(List<String> commandParts) {
     }
 
     private void pushFilesToDevice(List<File> files) {
-    if (files == null || files.isEmpty()) {
-        showAlert("No valid files dropped.");
-        return;
-    }
+        if (files == null || files.isEmpty()) {
+            showAlert("No valid files dropped.");
+            return;
+        }
 
-    if (selectedDevice == null && !selectDevice()) {
-        showAlert("No device selected.");
-        return;
-    }
+        if (selectedDevice == null && !selectDevice()) {
+            showAlert("No device selected.");
+            return;
+        }
 
-    List<String> folders = List.of(
-            "/sdcard/Download/",
-            "/sdcard/Documents/",
-            "/sdcard/Music/",
-            "/sdcard/Pictures/",
-            "/sdcard/DCIM/",
-            "/sdcard/Movies/"
-    );
+        List<String> folders = List.of(
+                "/sdcard/Download/",
+                "/sdcard/Documents/",
+                "/sdcard/Music/",
+                "/sdcard/Pictures/",
+                "/sdcard/DCIM/",
+                "/sdcard/Movies/"
+        );
 
-    Map<File, String> fileToFolder = new HashMap<>();
-    String selectedFolder = null;
+        Map<File, String> fileToFolder = new HashMap<>();
+        String selectedFolder = null;
 
-    if (files.size() > 1) {
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-        confirm.setTitle("Push to Same Folder?");
-        confirm.setHeaderText("Multiple files detected.");
-        confirm.setContentText("Do you want to push all files to the same folder?");
-        ButtonType yes = new ButtonType("Yes");
-        ButtonType no = new ButtonType("No");
-        confirm.getButtonTypes().setAll(yes, no);
+        if (files.size() > 1) {
+            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+            confirm.setTitle("Push to Same Folder?");
+            confirm.setHeaderText("Multiple files detected.");
+            confirm.setContentText("Do you want to push all files to the same folder?");
+            ButtonType yes = new ButtonType("Yes");
+            ButtonType no = new ButtonType("No");
+            confirm.getButtonTypes().setAll(yes, no);
 
-        Optional<ButtonType> choice = confirm.showAndWait();
-        if (choice.isPresent() && choice.get() == yes) {
+            Optional<ButtonType> choice = confirm.showAndWait();
+            if (choice.isPresent() && choice.get() == yes) {
+                ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
+                folderDialog.setTitle("Select Folder");
+                folderDialog.setHeaderText("Choose where to push all files:");
+                folderDialog.setContentText("Target folder:");
+                Optional<String> result = folderDialog.showAndWait();
+                if (result.isEmpty()) return;
+                selectedFolder = result.get();
+                for (File file : files) {
+                    fileToFolder.put(file, selectedFolder);
+                }
+            } else {
+                for (File file : files) {
+                    final String[] selectedPath = new String[1];
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    Platform.runLater(() -> {
+                        ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
+                        folderDialog.setTitle("Select Folder");
+                        folderDialog.setHeaderText("Choose folder for: " + file.getName());
+                        folderDialog.setContentText("Target folder:");
+                        Optional<String> result = folderDialog.showAndWait();
+                        selectedPath[0] = result.orElse(null);
+                        latch.countDown();
+                    });
+
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+                    if (selectedPath[0] != null) {
+                        fileToFolder.put(file, selectedPath[0]);
+                    }
+                }
+            }
+        } else {
+            File file = files.get(0);
             ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
             folderDialog.setTitle("Select Folder");
-            folderDialog.setHeaderText("Choose where to push all files:");
+            folderDialog.setHeaderText("Choose folder for: " + file.getName());
             folderDialog.setContentText("Target folder:");
             Optional<String> result = folderDialog.showAndWait();
             if (result.isEmpty()) return;
-            selectedFolder = result.get();
-            for (File file : files) {
-                fileToFolder.put(file, selectedFolder);
-            }
-        } else {
-            for (File file : files) {
-                final String[] selectedPath = new String[1];
-                CountDownLatch latch = new CountDownLatch(1);
-
-                Platform.runLater(() -> {
-                    ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
-                    folderDialog.setTitle("Select Folder");
-                    folderDialog.setHeaderText("Choose folder for: " + file.getName());
-                    folderDialog.setContentText("Target folder:");
-                    Optional<String> result = folderDialog.showAndWait();
-                    selectedPath[0] = result.orElse(null);
-                    latch.countDown();
-                });
-
-                try {
-                    latch.await();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-
-                if (selectedPath[0] != null) {
-                    fileToFolder.put(file, selectedPath[0]);
-                }
-            }
+            fileToFolder.put(file, result.get());
         }
-    } else {
-        File file = files.get(0);
-        ChoiceDialog<String> folderDialog = new ChoiceDialog<>(folders.get(0), folders);
-        folderDialog.setTitle("Select Folder");
-        folderDialog.setHeaderText("Choose folder for: " + file.getName());
-        folderDialog.setContentText("Target folder:");
-        Optional<String> result = folderDialog.showAndWait();
-        if (result.isEmpty()) return;
-        fileToFolder.put(file, result.get());
+
+        new Thread(() -> {
+            int total = fileToFolder.size();
+            int i = 0;
+            for (Map.Entry<File, String> entry : fileToFolder.entrySet()) {
+                File file = entry.getKey();
+                String folder = entry.getValue();
+                String targetPath = folder + file.getName();
+                updateProgress(++i, total);
+                System.out.println("Pushing: " + file.getAbsolutePath());
+
+                List<String> cmd = List.of(
+                        "adb", "-s", selectedDevice,
+                        "push", file.getAbsolutePath(), targetPath
+                );
+                List<String> result = runAdbCommand(cmd);
+                result.forEach(System.out::println);
+            }
+            hideProgress();
+            Platform.runLater(() -> showAlert("Files pushed successfully."));
+        }).start();
     }
-
-    new Thread(() -> {
-        int total = fileToFolder.size();
-        int i = 0;
-        for (Map.Entry<File, String> entry : fileToFolder.entrySet()) {
-            File file = entry.getKey();
-            String folder = entry.getValue();
-            String targetPath = folder + file.getName();
-            updateProgress(++i, total);
-            System.out.println("Pushing: " + file.getAbsolutePath());
-
-            List<String> cmd = List.of(
-                    "adb", "-s", selectedDevice,
-                    "push", file.getAbsolutePath(), targetPath
-            );
-            List<String> result = runAdbCommand(cmd);
-            result.forEach(System.out::println);
-        }
-        hideProgress();
-        Platform.runLater(() -> showAlert("Files pushed successfully."));
-    }).start();
-}
-
 
     private void updateProgress(int current, int total) {
         if (total <= 0) return;
@@ -487,9 +516,6 @@ private List<String> runAdbCommand(List<String> commandParts) {
             progressLabel.setVisible(false);
         });
     }
-
-
-
 
     private void showAlert(String message) {
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
