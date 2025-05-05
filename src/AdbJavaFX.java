@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.HashMap;
 import java.util.Map;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 
 public class AdbJavaFX extends Application {
 
@@ -71,9 +72,26 @@ public class AdbJavaFX extends Application {
         for (String[] cmd : adbCommands) {
             Button btn = new Button(cmd[0]);
             btn.setMaxWidth(Double.MAX_VALUE);
+            //btn.setLineSpacing(100);
             btn.setOnAction(e -> handleCommand(cmd[1]));
             buttonBox.getChildren().add(btn);
         }
+
+        // Add Install APK button
+        Button installApkBtn = new Button("Install APK on Devices");
+        installApkBtn.setMaxWidth(Double.MAX_VALUE);
+        installApkBtn.setOnAction(e -> {
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.setTitle("Select APK File");
+            fileChooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("Android Package (APK)", "*.apk")
+            );
+            File apkFile = fileChooser.showOpenDialog(stage);
+            if (apkFile != null) {
+                installApkOnAllDevices(apkFile);
+            }
+        });
+        buttonBox.getChildren().add(installApkBtn);
 
         // Add Pull and Exit buttons
         Button pullBtn = new Button("Pull Selected Files");
@@ -191,7 +209,13 @@ public class AdbJavaFX extends Application {
             boolean success = false;
             if (db.hasFiles()) {
                 success = true;
-                pushFilesToDevice(db.getFiles());
+                List<File> files = db.getFiles();
+                // Check if it's an APK file
+                if (files.size() == 1 && files.get(0).getName().toLowerCase().endsWith(".apk")) {
+                    installApkOnAllDevices(files.get(0));
+                } else {
+                    pushFilesToDevice(files);
+                }
             }
             event.setDropCompleted(success);
             event.consume();
@@ -269,11 +293,12 @@ public class AdbJavaFX extends Application {
                 BufferedReader reader = new BufferedReader(new InputStreamReader(logcatProcess.getInputStream()));
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    String finalLine = line;
+                    final String finalLine = line;
                     Platform.runLater(() -> logcatOutput.appendText(finalLine + "\n"));
                 }
             } catch (IOException e) {
-                Platform.runLater(() -> logcatOutput.appendText("Error: " + e.getMessage()));
+                final String errorMessage = e.getMessage();
+                Platform.runLater(() -> logcatOutput.appendText("Error: " + errorMessage));
             }
         }).start();
     }
@@ -348,10 +373,12 @@ public class AdbJavaFX extends Application {
 
                 int percent = (int) ((i + 1) / (double) total * 100);
                 int finalI = i;
+                final File finalLocalFile = localFile;
+                final int finalPercent = percent;
                 Platform.runLater(() -> {
                     progressBar.setProgress((finalI + 1) / (double) total);
-                    progressLabel.setText(percent + "%");
-                    showAlert("Pulled to: " + localFile.getAbsolutePath());
+                    progressLabel.setText(finalPercent + "%");
+                    showAlert("Pulled to: " + finalLocalFile.getAbsolutePath());
                 });
             }
 
@@ -363,21 +390,7 @@ public class AdbJavaFX extends Application {
     }
 
     private boolean selectDevice() {
-        List<String> devices = new ArrayList<>();
-        try {
-            Process process = new ProcessBuilder("adb", "devices").start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.endsWith("\tdevice") && !line.startsWith("List")) {
-                    devices.add(line.split("\t")[0]);
-                }
-            }
-            process.waitFor();
-        } catch (IOException | InterruptedException e) {
-            showAlert("Error checking devices: " + e.getMessage());
-            return false;
-        }
+        List<String> devices = getConnectedDevices();
 
         if (devices.isEmpty()) {
             showAlert("No devices connected.");
@@ -394,6 +407,163 @@ public class AdbJavaFX extends Application {
             result.ifPresent(device -> selectedDevice = device);
             return result.isPresent();
         }
+    }
+
+    private List<String> getConnectedDevices() {
+        List<String> devices = new ArrayList<>();
+        try {
+            Process process = new ProcessBuilder("adb", "devices").start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.endsWith("\tdevice") && !line.startsWith("List")) {
+                    devices.add(line.split("\t")[0]);
+                }
+            }
+            process.waitFor();
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
+        return devices;
+    }
+
+    private void installApkOnAllDevices(File apkFile) {
+        if (!apkFile.exists() || !apkFile.isFile()) {
+            showAlert("Invalid APK file.");
+            return;
+        }
+
+        // Get all connected devices
+        List<String> devices = getConnectedDevices();
+        if (devices.isEmpty()) {
+            showAlert("No devices connected.");
+            return;
+        }
+
+        // Confirm installation on multiple devices if applicable
+        if (devices.size() > 1) {
+            Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+            confirm.setTitle("Install on Multiple Devices");
+            confirm.setHeaderText("Multiple devices detected (" + devices.size() + ")");
+            confirm.setContentText("Do you want to install " + apkFile.getName() + " on all connected devices?");
+            ButtonType yesBtn = new ButtonType("Yes, install on all");
+            ButtonType selectBtn = new ButtonType("Let me select devices");
+            ButtonType cancelBtn = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+            confirm.getButtonTypes().setAll(yesBtn, selectBtn, cancelBtn);
+
+            Optional<ButtonType> result = confirm.showAndWait();
+            if (result.isPresent()) {
+                if (result.get() == cancelBtn) {
+                    return;
+                } else if (result.get() == selectBtn) {
+                    devices = selectDevicesForInstallation(devices);
+                    if (devices.isEmpty()) return;
+                }
+            } else {
+                return;
+            }
+        }
+
+        // Install the APK on selected devices
+        final List<String> finalDevices = devices;
+        final File finalApkFile = apkFile;
+        new Thread(() -> {
+            Platform.runLater(() -> {
+                progressBar.setVisible(true);
+                progressLabel.setVisible(true);
+                progressBar.setProgress(0);
+                logcatOutput.clear();
+                logcatOutput.appendText("Starting installation of " + finalApkFile.getName() + " on " + finalDevices.size() + " device(s)...\n");
+            });
+
+            final int totalDevices = finalDevices.size();
+            for (int i = 0; i < totalDevices; i++) {
+                final String device = finalDevices.get(i);
+                final int deviceNumber = i;
+
+                // Update progress
+                Platform.runLater(() -> {
+                    progressBar.setProgress((double) deviceNumber / totalDevices);
+                    progressLabel.setText("Installing on device " + (deviceNumber + 1) + "/" + totalDevices);
+                });
+
+                // Run the install command
+                List<String> command = List.of(
+                    "adb", "-s", device, "install", "-r", finalApkFile.getAbsolutePath()
+                );
+
+                List<String> result = runAdbCommand(command);
+
+                // Check if installation was successful
+                final boolean success = result.stream().anyMatch(line -> line.contains("Success"));
+                final List<String> finalResult = result;
+                final String deviceId = device;
+                final String apkFileName = finalApkFile.getName();
+
+                Platform.runLater(() -> {
+                    if (success) {
+                        logcatOutput.appendText("Successfully installed " + apkFileName + " on device " + deviceId + "\n");
+                    } else {
+                        logcatOutput.appendText("Failed to install " + apkFileName + " on device " + deviceId + "\n");
+                        logcatOutput.appendText("Error: " + String.join("\n", finalResult) + "\n");
+                    }
+                });
+            }
+
+            // Hide progress when done
+            Platform.runLater(() -> {
+                progressBar.setVisible(false);
+                progressLabel.setVisible(false);
+                showAlert("APK installation completed.");
+            });
+        }).start();
+    }
+
+    private List<String> selectDevicesForInstallation(List<String> allDevices) {
+        // Create a multi-choice dialog to select devices
+        List<String> selectedDevices = new ArrayList<>();
+
+        // Create checkboxes for each device
+        List<CheckBox> checkboxes = new ArrayList<>();
+        for (String device : allDevices) {
+            CheckBox cb = new CheckBox(device);
+            cb.setSelected(true); // Pre-select all devices
+            checkboxes.add(cb);
+        }
+
+        // Create a dialog with checkboxes
+        Dialog<List<String>> dialog = new Dialog<>();
+        dialog.setTitle("Select Devices");
+        dialog.setHeaderText("Choose devices for APK installation:");
+
+        // Set up the dialog's content
+        VBox vbox = new VBox(10);
+        vbox.getChildren().addAll(checkboxes);
+        dialog.getDialogPane().setContent(vbox);
+
+        // Add buttons
+        ButtonType selectBtn = new ButtonType("Install", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelBtn = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(selectBtn, cancelBtn);
+
+        // Set result converter
+        dialog.setResultConverter(dialogButton -> {
+            if (dialogButton == selectBtn) {
+                return checkboxes.stream()
+                        .filter(CheckBox::isSelected)
+                        .map(CheckBox::getText)
+                        .toList();
+            }
+            return null;
+        });
+
+        // Show dialog and get result
+        Optional<List<String>> result = dialog.showAndWait();
+        if (result.isPresent()) {
+            selectedDevices = result.get();
+        }
+
+        return selectedDevices;
     }
 
     private void pushFilesToDevice(List<File> files) {
@@ -478,13 +648,14 @@ public class AdbJavaFX extends Application {
         }
 
         new Thread(() -> {
-            int total = fileToFolder.size();
+            final int total = fileToFolder.size();
             int i = 0;
             for (Map.Entry<File, String> entry : fileToFolder.entrySet()) {
                 File file = entry.getKey();
                 String folder = entry.getValue();
                 String targetPath = folder + file.getName();
-                updateProgress(++i, total);
+                final int currentIndex = ++i;
+                updateProgress(currentIndex, total);
                 System.out.println("Pushing: " + file.getAbsolutePath());
 
                 List<String> cmd = List.of(
@@ -499,9 +670,9 @@ public class AdbJavaFX extends Application {
         }).start();
     }
 
-    private void updateProgress(int current, int total) {
+    private void updateProgress(final int current, final int total) {
         if (total <= 0) return;
-        double progress = (double) current / total;
+        final double progress = (double) current / total;
         Platform.runLater(() -> {
             progressBar.setVisible(true);
             progressLabel.setVisible(true);
